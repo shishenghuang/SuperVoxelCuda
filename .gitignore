@@ -1,0 +1,15 @@
+.vscode
+build
+bin
+lib
+*~
+*.o
+*.d
+*.so
+*.a
+*.log
+-g
+bak
+*.exe
+data
+
