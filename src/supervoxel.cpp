@@ -97,9 +97,11 @@ namespace cl
         //===================================Estimate Normals using CUDA==============================        double* normals = new double[pnum];
         LOG(INFO) << "Begin to compute normal";
         double* normals = new double[pnum*3];
+        double* dis_host = new double[pnum];
         start_t = clock();
-        NormalEstimation nest(points , neighbors , pnum , k_neighbor);
-        nest.eval(normals);
+        NormalEstimation nest(points , neighbors , pnum , k_neighbor , resolution);
+        nest.eval_new(normals , dis_host);
+        //nest.eval(normals);
         end_t = clock();
         LOG(INFO) << "Compute Normal using " << (end_t - start_t) / CLOCKS_PER_SEC << " s" << std::endl;
         //==================================Finish Estimate Normals===================================
@@ -139,14 +141,18 @@ namespace cl
         start_t = clock();
         vector<double> dis(pnum , DBL_MAX);
 
-        for (int i = 0; i < pnum; ++i) {
-            for (int j = 0 ; j < adjacents[i].size() ; j ++) {
-                int k = adjacents[i][j];
-                if (i != k) {
-                    dis[i] = std::min(dis[i], metric(&points[i*3], &normals[i*3], &points[k*3], &normals[k*3] ,thelta));//);
-                }
-            }
+        // for (int i = 0; i < pnum; ++i) {
+        //     for (int j = 0 ; j < adjacents[i].size() ; j ++) {
+        //         int k = adjacents[i][j];
+        //         if (i != k) {
+        //             dis[i] = std::min(dis[i], metric(&points[i*3], &normals[i*3], &points[k*3], &normals[k*3] ,thelta));//);
+        //         }
+        //     }
+        // }
+        for(int i = 0 ; i < pnum ; i ++){
+            dis[i] = dis_host[i];
         }
+        //delete dis_host;
         std::sort(dis.begin() , dis.end());
         double lambda = std::max(DBL_EPSILON, dis[pnum / 2 + 1]);
         end_t = clock();
@@ -155,6 +161,7 @@ namespace cl
         // ------------------------------------------------------------------
         // ---------------- Step 1: Find supervoxels. -----------------------
         start_t = clock();
+        lambda *= 32.0;
         double start_tt, end_tt;
         for (; ; lambda *= 2.0) {
             if (supervoxels.size() <= 1) break;
@@ -222,7 +229,7 @@ namespace cl
             supervoxels.resize(number_of_supervoxels);
 
             end_tt = clock();
-            LOG(INFO) <<  "In Step 1 obtain number_of_supervoxels " << number_of_supervoxels << " using " << (end_tt - start_tt ) / CLOCKS_PER_SEC << "s " << std::endl;
+            //LOG(INFO) <<  "In Step 1 obtain number_of_supervoxels " << number_of_supervoxels << " using " << (end_tt - start_tt ) / CLOCKS_PER_SEC << "s " << std::endl;
             if (number_of_supervoxels == n_supervoxels) break;
         }
         end_t = clock();
@@ -239,64 +246,68 @@ namespace cl
         start_t = clock();
         for (int i = 0; i < pnum; ++i) {
             int j = labels[i];
-            dis[i] = metric(&points[i*3], &normals[i*3], &points[j*3], &normals[j*3] , thelta);
+            dis_host[i] = metric(&points[i*3], &normals[i*3], &points[j*3], &normals[j*3] , thelta);
         }
 
-        std::queue<int> q;
-        vector<bool> in_q(pnum, false);
+        nest.exchange(labels , dis_host);
 
-        for (int i = 0; i < pnum; ++i) {
-            int index = i * k_neighbor;
-            for(int j = 0 ; j < k_neighbor; j ++){
-                int n_j = neighbors[index+j];
-                if (labels[i] != labels[n_j]) {
-                    if (!in_q[i]) {
-                        q.push(i);
-                        in_q[i] = true;
-                    }
-                    if (!in_q[n_j]) {
-                        q.push(n_j);
-                        in_q[n_j] = true;
-                    }
-                }
-            }
-        }
+        //delete dis_host;
 
-        bool change = false;
-        while (!q.empty()) {
-            int i = q.front();
-            q.pop();
-            in_q[i] = false;
-            change = false;
+        // std::queue<int> q;
+        // vector<bool> in_q(pnum, false);
 
-            int index = i * k_neighbor;
-            for(int j = 0 ; j < k_neighbor; j ++){
-            // for (int j : neighbors[i]) {
-                int n_j = neighbors[index+j];
-                int a = labels[i];
-                int b = labels[n_j];
-                if (a == b) continue;
-                double d = metric(&points[i*3], &normals[i*3], &points[b*3], &normals[b*3] , thelta);
-                if (d < dis[i]) {
-                    labels[i] = b;
-                    dis[i] = d;
-                    change = true;
-                }
-            }
+        // for (int i = 0; i < pnum; ++i) {
+        //     int index = i * k_neighbor;
+        //     for(int j = 0 ; j < k_neighbor; j ++){
+        //         int n_j = neighbors[index+j];
+        //         if (labels[i] != labels[n_j]) {
+        //             if (!in_q[i]) {
+        //                 q.push(i);
+        //                 in_q[i] = true;
+        //             }
+        //             if (!in_q[n_j]) {
+        //                 q.push(n_j);
+        //                 in_q[n_j] = true;
+        //             }
+        //         }
+        //     }
+        // }
 
-            if (change) {
-                for(int j = 0 ;j < k_neighbor; j ++){
-                    int n_j = neighbors[index+j];
-                //for (int j : neighbors[i]) {
-                    if (labels[i] != labels[n_j]) {
-                        if (!in_q[n_j] ) {
-                            q.push(n_j);
-                            in_q[n_j] = true;
-                        }
-                    }
-                }
-            }
-        }
+        // bool change = false;
+        // while (!q.empty()) {
+        //     int i = q.front();
+        //     q.pop();
+        //     in_q[i] = false;
+        //     change = false;
+
+        //     int index = i * k_neighbor;
+        //     for(int j = 0 ; j < k_neighbor; j ++){
+        //     // for (int j : neighbors[i]) {
+        //         int n_j = neighbors[index+j];
+        //         int a = labels[i];
+        //         int b = labels[n_j];
+        //         if (a == b) continue;
+        //         double d = metric(&points[i*3], &normals[i*3], &points[b*3], &normals[b*3] , thelta);
+        //         if (d < dis[i]) {
+        //             labels[i] = b;
+        //             dis[i] = d;
+        //             change = true;
+        //         }
+        //     }
+
+        //     if (change) {
+        //         for(int j = 0 ;j < k_neighbor; j ++){
+        //             int n_j = neighbors[index+j];
+        //         //for (int j : neighbors[i]) {
+        //             if (labels[i] != labels[n_j]) {
+        //                 if (!in_q[n_j] ) {
+        //                     q.push(n_j);
+        //                     in_q[n_j] = true;
+        //                 }
+        //             }
+        //         }
+        //     }
+        // }
         end_t = clock();
         LOG(INFO) << "Step 2 using : " << (end_t - start_t ) / CLOCKS_PER_SEC << "s " << std::endl;
         
@@ -328,6 +339,7 @@ namespace cl
         delete ismerged;
         delete neighbors;
         delete normals;
+        delete dis_host;
 
     }
 } // namespace cl
